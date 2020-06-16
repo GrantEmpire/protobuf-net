@@ -34,7 +34,7 @@ namespace ProtoBuf.Internal.Serializers
             using var tmp = ctx.GetLocalWithValue(typeof(TChild), valueFrom);
             ctx.LoadState();
             ctx.LoadValue(tmp);
-            ctx.LoadSelfAsService<ISubTypeSerializer<TChild>, TChild>();
+            ctx.LoadSelfAsService<ISubTypeSerializer<TChild>, TChild>(default, default);
             ctx.EmitCall(s_WriteSubType[2].MakeGenericMethod(typeof(TChild)));
         }
 
@@ -46,7 +46,7 @@ namespace ProtoBuf.Internal.Serializers
             ctx.LoadState();
             ctx.LoadValue(fieldNumber);
             ctx.LoadValue(tmp);
-            ctx.LoadSelfAsService<ISubTypeSerializer<TChild>, TChild>();
+            ctx.LoadSelfAsService<ISubTypeSerializer<TChild>, TChild>(default, default);
             ctx.EmitCall(s_WriteSubType[3].MakeGenericMethod(typeof(TChild)));
         }
 
@@ -63,7 +63,7 @@ namespace ProtoBuf.Internal.Serializers
             var type = typeof(SubTypeState<TParent>);
             ctx.LoadAddress(valueFrom, type);
             ctx.LoadState();
-            ctx.LoadSelfAsService<ISubTypeSerializer<TChild>, TChild>();
+            ctx.LoadSelfAsService<ISubTypeSerializer<TChild>, TChild>(default, default);
             ctx.EmitCall(type.GetMethod(nameof(SubTypeState<TParent>.ReadSubType)).MakeGenericMethod(typeof(TChild)));
         }
     }
@@ -117,6 +117,18 @@ namespace ProtoBuf.Internal.Serializers
                     category.ThrowInvalidCategory();
                     return default;
             }
+        }
+
+        protected override WireType GetDefaultWireType(ref DataFormat dataFormat)
+        {
+            var ser = CustomSerializer;
+            if (ser != null)
+            {
+                var features = ser.Features;
+                if (features.GetCategory() == SerializerFeatures.CategoryScalar)
+                    return features.GetWireType();
+            }
+            return base.GetDefaultWireType(ref dataFormat);
         }
 
         public override void EmitWrite(CompilerContext ctx, Local valueFrom)
@@ -287,7 +299,7 @@ namespace ProtoBuf.Internal.Serializers
             }
             else
             {
-                ctx.LoadSelfAsService<ISerializer<T>, T>();
+                ctx.LoadSelfAsService<ISerializer<T>, T>(default, default);
             }
         }
         public static void EmitReadMessage<T>(CompilerContext ctx, Local value = null, FieldInfo serializer = null
@@ -340,12 +352,17 @@ namespace ProtoBuf.Internal.Serializers
         protected MetaType MetaType { get; private set; }
 
 
-        internal static IRuntimeProtoSerializerNode Create(Type type, MetaType metaType)
+        internal static IRuntimeProtoSerializerNode Create(Type type, MetaType metaType, ref DataFormat dataFormat, out WireType defaultWireType)
         {
             var obj = (SubItemSerializer)Activator.CreateInstance(typeof(SubValueSerializer<>).MakeGenericType(type), nonPublic: true);
             obj.MetaType = metaType ?? throw new ArgumentNullException(nameof(metaType));
+            defaultWireType = obj.GetDefaultWireType(ref dataFormat);
             return (IRuntimeProtoSerializerNode)obj;
         }
+
+        protected virtual WireType GetDefaultWireType(ref DataFormat dataFormat)
+            => dataFormat == DataFormat.Group ? WireType.StartGroup : WireType.String;
+
         internal static IRuntimeProtoSerializerNode Create(Type actualType, MetaType metaType, Type parentType)
         {
             var obj = (SubItemSerializer)Activator.CreateInstance(typeof(SubTypeSerializer<,>).MakeGenericType(parentType, actualType), nonPublic: true);

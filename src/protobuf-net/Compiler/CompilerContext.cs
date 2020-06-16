@@ -122,7 +122,6 @@ namespace ProtoBuf.Compiler
         public static ProtoSubTypeDeserializer<T> BuildSubTypeDeserializer<T>(CompilerContextScope scope, IRuntimeProtoSerializerNode head, TypeModel model)
             where T : class
         {
-            Type type = head.ExpectedType;
             using CompilerContext ctx = new CompilerContext(scope, head.ExpectedType, SignatureType.ReaderScope_Input, true, model, typeof(SubTypeState<T>), typeof(T));
             head.EmitRead(ctx, ctx.InputValue);
             // note that EmitRead will unwrap the T for us on the stack
@@ -133,8 +132,7 @@ namespace ProtoBuf.Compiler
 
         public static ProtoDeserializer<T> BuildDeserializer<T>(CompilerContextScope scope, IRuntimeProtoSerializerNode head, TypeModel model, bool isScalar = false)
         {
-            Type type = head.ExpectedType;
-            using CompilerContext ctx = new CompilerContext(scope, type, SignatureType.ReaderScope_Input, true, model, typeof(T), typeof(T));
+            using CompilerContext ctx = new CompilerContext(scope, head.ExpectedType, SignatureType.ReaderScope_Input, true, model, typeof(T), typeof(T));
 
             head.EmitRead(ctx, ctx.InputValue);
             if (!isScalar) ctx.LoadValue(ctx.InputValue);
@@ -296,16 +294,28 @@ namespace ProtoBuf.Compiler
 
         public bool IsService => Scope.IsFullEmit && !IsStatic;
 
-        public void LoadSelfAsService<TService, T>() where TService : class
+        public void LoadSelfAsService<TService, T>(CompatibilityLevel compatibilityLevel, DataFormat dataFormat) where TService : class
         {
-            if (IsStatic || TypeModel.TryGetSerializer<T>(null) is object) // don't claim inbuilts
+            var inbuilt = TypeModel.GetInbuiltSerializer<T>(compatibilityLevel, dataFormat);
+            if (IsStatic || inbuilt is object) // don't claim inbuilts
             {
-                LoadNullRef();
+                if (inbuilt is object && typeof(TService) == typeof(ISerializer<T>) && !(inbuilt is PrimaryTypeProvider))
+                {
+                    // we'll get the call-site to emit TypeModel.GetInbuiltSerializer<T>(compatibilityLevel, dataFormat)
+                    LoadValue((int)compatibilityLevel);
+                    LoadValue((int)dataFormat);
+                    EmitCall(s_GetInbuiltSerializer.MakeGenericMethod(typeof(T)));
+                }
+                else
+                {
+                    // no serializer (uses Level200 etc)
+                    LoadNullRef();
+                }
             }
             else
             {
                 Emit(OpCodes.Ldarg_0); // push ourselves
-                if (Scope.IsFullEmit && Scope.ImplementsServiceFor<T>())
+                if (Scope.IsFullEmit && Scope.ImplementsServiceFor<T>(compatibilityLevel))
                 { } // yay, we should be fine here
                 else
                 {
@@ -315,6 +325,8 @@ namespace ProtoBuf.Compiler
                 }
             }
         }
+
+        private static readonly MethodInfo s_GetInbuiltSerializer = typeof(TypeModel).GetMethod(nameof(TypeModel.GetInbuiltSerializer), BindingFlags.Static | BindingFlags.Public);
 
         private readonly ILGenerator il;
 
@@ -773,11 +785,11 @@ namespace ProtoBuf.Compiler
 
             if (isTrusted)
             {
-                (knownTrustedAssemblies ?? (knownTrustedAssemblies = new List<Assembly>())).Add(assembly);
+                (knownTrustedAssemblies ??= new List<Assembly>()).Add(assembly);
             }
             else
             {
-                (knownUntrustedAssemblies ?? (knownUntrustedAssemblies = new List<Assembly>())).Add(assembly);
+                (knownUntrustedAssemblies ??= new List<Assembly>()).Add(assembly);
             }
             return isTrusted;
         }
